@@ -1,0 +1,1031 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Система оценки проектов - Транспортные инновации Москвы</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .loading-spinner {
+            border: 3px solid #f3f4f6;
+            border-top: 3px solid #3b82f6;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .fade-in {
+            animation: fadeIn 0.3s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        // API configuration - автоматическое определение URL
+        const API_BASE_URL = window.location.hostname === 'localhost' 
+            ? 'http://localhost:5000/api'
+            : 'https://transportation-innovations-moscow.onrender.com/api';
+
+        // Константы
+        const индустрии = ["Транспорт", "Финтех", "Медтех", "Гостех"];
+        const типыПродуктов = ["Софт", "Железо", "Приложение", "Веб"];
+        const моделиПродаж = ["B2B", "B2C", "B2B2C"];
+        const стадииПродукта = ["Идея", "MVP", "Работает", "Рост", "Зрелость"];
+        const целевыеСегменты = [
+            "Московское метро", "Наземный транспорт", "Парковки", 
+            "Центр ITS", "Пассажиры", "B2G", "B2B"
+        ];
+
+        // Веса параметров инвестиционной оценки
+        const весаИнвестиционнойОценки = {
+            продукт: 2, рынок: 2, бизнесМодель: 1, трекшн: 2,
+            команда: 4, конкуренция: 1, финансы: 1, сделка: 1
+        };
+        const максБаллПослеMVP = 28;
+
+        // API service
+        const api = {
+            async getProjects() {
+                const response = await axios.get(`${API_BASE_URL}/projects`);
+                return response.data;
+            },
+            async getProject(id) {
+                const response = await axios.get(`${API_BASE_URL}/projects/${id}`);
+                return response.data;
+            },
+            async createProject(projectData) {
+                const response = await axios.post(`${API_BASE_URL}/projects`, projectData);
+                return response.data;
+            },
+            async updateProject(id, projectData) {
+                const response = await axios.put(`${API_BASE_URL}/projects/${id}`, projectData);
+                return response.data;
+            },
+            async deleteProject(id) {
+                await axios.delete(`${API_BASE_URL}/projects/${id}`);
+            },
+            async healthCheck() {
+                try {
+                    const response = await axios.get(`${API_BASE_URL}/health`);
+                    return response.data.status === 'OK';
+                } catch (error) {
+                    return false;
+                }
+            }
+        };
+
+        function App() {
+            const [activeTab, setActiveTab] = useState("new");
+            const [expandedSections, setExpandedSections] = useState({
+                A: true, B: true, C: true, D: true, E: true, F: false, G: false, H: false
+            });
+            const [projects, setProjects] = useState([]);
+            const [loading, setLoading] = useState(false);
+            const [backendStatus, setBackendStatus] = useState('checking');
+            const [currentProjectId, setCurrentProjectId] = useState(null);
+
+            // Section A state
+            const [projectCard, setProjectCard] = useState({
+                projectName: "", legalName: "", website: "", contactPerson: "",
+                email: "", phone: "", industry: "", productType: "", salesModel: "",
+                productStage: "", targetSegments: []
+            });
+
+            // Section B state
+            const [filters, setFilters] = useState({
+                соответствуетСекторам: false, соответствуетНаправлениям: false, минКоманда: false
+            });
+            const [redFlags, setRedFlags] = useState({
+                missingDocs: false, outOfFocusIndustry: false, foundersNotFulltime: false,
+                keyCompetencesMissing: false, unusualOwnership: false, shortRunway: false,
+                processesOutsourced: false, otherFlag: false, otherText: ""
+            });
+
+            // Section C: Инвестиционная оценка
+            const [инвестиционнаяОценка, setИнвестиционнаяОценка] = useState({
+                продукт: { балл: null, комментарий: "" }, рынок: { балл: null, комментарий: "" },
+                бизнесМодель: { балл: null, комментарий: "" }, трекшн: { балл: null, комментарий: "" },
+                команда: { балл: null, комментарий: "" }, конкуренция: { балл: null, комментарий: "" },
+                финансы: { балл: null, комментарий: "" }, сделка: { балл: null, комментарий: "" }
+            });
+
+            // Section D: Транспортная оценка
+            const [транспортнаяОценка, setТранспортнаяОценка] = useState({
+                готовность: { балл: null, комментарий: "" }, каналы: { балл: null, комментарий: "" },
+                масштабируемость: { балл: null, комментарий: "" }, применимость: { балл: null, комментарий: "" },
+                конкуренция: { балл: null, комментарий: "" }, команда: { балл: null, комментарий: "" }
+            });
+
+            // Section E: решение
+            const [overrideDecision, setOverrideDecision] = useState("");
+            const [overrideComment, setOverrideComment] = useState("");
+
+            // Section F: Инвестиционное заключение
+            const [инвестиционноеЗаключение, setИнвестиционноеЗаключение] = useState({
+                сделка: "", продукт: "", рынок: "", бизнесМодель: "", трекшн: "",
+                команда: "", конкуренция: "", финансы: "", инвестиционноеРезюме: "",
+                иннПроверка: false, заметкиПоИНН: ""
+            });
+
+            // Section G: Транспортная применимость
+            const [транспортноеЗаключение, setТранспортноеЗаключение] = useState({
+                useCases: "", integrationInfra: "", effectsKpis: "", regulationSafety: "",
+                pilotPlan: "", pilotRecommendation: ""
+            });
+
+            // Section H: сводка
+            const [сводка, setСводка] = useState({
+                краткоеОписание: "",
+                сильныеСтороны: ["Сильная команда", "Четкая проблема", "Релевантность транспорту"],
+                основныеРиски: ["Непонятная юнит-экономика", "Ограниченный трекшн", "Риски интеграции"],
+                финальнаяРекомендация: "Требует оценки"
+            });
+
+            // Check backend status on component mount
+            useEffect(() => {
+                checkBackendStatus();
+                loadProjects();
+            }, []);
+
+            const checkBackendStatus = async () => {
+                const isHealthy = await api.healthCheck();
+                setBackendStatus(isHealthy ? 'connected' : 'disconnected');
+            };
+
+            const loadProjects = async () => {
+                setLoading(true);
+                try {
+                    const data = await api.getProjects();
+                    setProjects(data);
+                } catch (error) {
+                    console.error('Ошибка загрузки проектов:', error);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const saveProject = async () => {
+                if (!projectCard.projectName.trim()) {
+                    alert('Пожалуйста, введите название проекта');
+                    return;
+                }
+
+                setLoading(true);
+                try {
+                    const projectData = {
+                        name: projectCard.projectName,
+                        industry: projectCard.industry,
+                        инвестиционнаяОценка: итогиИнвестиционнойОценки.процент,
+                        транспортнаяОценка: итогТранспортнойОценки,
+                        status: отображаемоеРешение,
+                        projectCard, filters, redFlags, инвестиционнаяОценка, транспортнаяОценка,
+                        overrideDecision, overrideComment, инвестиционноеЗаключение,
+                        транспортноеЗаключение, сводка
+                    };
+
+                    let savedProject;
+                    if (currentProjectId) {
+                        savedProject = await api.updateProject(currentProjectId, projectData);
+                        setProjects(projects.map(p => p.id === currentProjectId ? savedProject : p));
+                    } else {
+                        savedProject = await api.createProject(projectData);
+                        setProjects([...projects, savedProject]);
+                        setCurrentProjectId(savedProject.id);
+                    }
+
+                    alert(`Проект "${savedProject.name}" успешно сохранен!`);
+                } catch (error) {
+                    console.error('Ошибка сохранения проекта:', error);
+                    alert('Ошибка сохранения проекта. Пожалуйста, попробуйте снова.');
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const loadProject = async (projectId) => {
+                setLoading(true);
+                try {
+                    const project = await api.getProject(projectId);
+                    
+                    setProjectCard(project.projectCard || {});
+                    setFilters(project.filters || {});
+                    setRedFlags(project.redFlags || {});
+                    setИнвестиционнаяОценка(project.инвестиционнаяОценка || {});
+                    setТранспортнаяОценка(project.транспортнаяОценка || {});
+                    setOverrideDecision(project.overrideDecision || "");
+                    setOverrideComment(project.overrideComment || "");
+                    setИнвестиционноеЗаключение(project.инвестиционноеЗаключение || {});
+                    setТранспортноеЗаключение(project.транспортноеЗаключение || {});
+                    setСводка(project.сводка || {});
+                    
+                    setCurrentProjectId(projectId);
+                    setActiveTab('new');
+                    
+                    alert(`Проект "${project.name}" успешно загружен!`);
+                } catch (error) {
+                    console.error('Ошибка загрузки проекта:', error);
+                    alert('Ошибка загрузки проекта. Пожалуйста, попробуйте снова.');
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const deleteProject = async (projectId, projectName) => {
+                if (!confirm(`Вы уверены, что хотите удалить проект "${projectName}"?`)) return;
+
+                setLoading(true);
+                try {
+                    await api.deleteProject(projectId);
+                    setProjects(projects.filter(p => p.id !== projectId));
+                    
+                    if (currentProjectId === projectId) {
+                        resetForm();
+                    }
+                    
+                    alert(`Проект "${projectName}" успешно удален!`);
+                } catch (error) {
+                    console.error('Ошибка удаления проекта:', error);
+                    alert('Ошибка удаления проекта. Пожалуйста, попробуйте снова.');
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const resetForm = () => {
+                setProjectCard({
+                    projectName: "", legalName: "", website: "", contactPerson: "",
+                    email: "", phone: "", industry: "", productType: "", salesModel: "",
+                    productStage: "", targetSegments: []
+                });
+                setFilters({ соответствуетСекторам: false, соответствуетНаправлениям: false, минКоманда: false });
+                setRedFlags({
+                    missingDocs: false, outOfFocusIndustry: false, foundersNotFulltime: false,
+                    keyCompetencesMissing: false, unusualOwnership: false, shortRunway: false,
+                    processesOutsourced: false, otherFlag: false, otherText: ""
+                });
+                setИнвестиционнаяОценка({
+                    продукт: { балл: null, комментарий: "" }, рынок: { балл: null, комментарий: "" },
+                    бизнесМодель: { балл: null, комментарий: "" }, трекшн: { балл: null, комментарий: "" },
+                    команда: { балл: null, комментарий: "" }, конкуренция: { балл: null, комментарий: "" },
+                    финансы: { балл: null, комментарий: "" }, сделка: { балл: null, комментарий: "" }
+                });
+                setТранспортнаяОценка({
+                    готовность: { балл: null, комментарий: "" }, каналы: { балл: null, комментарий: "" },
+                    масштабируемость: { балл: null, комментарий: "" }, применимость: { балл: null, комментарий: "" },
+                    конкуренция: { балл: null, комментарий: "" }, команда: { балл: null, комментарий: "" }
+                });
+                setOverrideDecision("");
+                setOverrideComment("");
+                setИнвестиционноеЗаключение({
+                    сделка: "", продукт: "", рынок: "", бизнесМодель: "", трекшн: "",
+                    команда: "", конкуренция: "", финансы: "", инвестиционноеРезюме: "",
+                    иннПроверка: false, заметкиПоИНН: ""
+                });
+                setТранспортноеЗаключение({
+                    useCases: "", integrationInfra: "", effectsKpis: "", regulationSafety: "",
+                    pilotPlan: "", pilotRecommendation: ""
+                });
+                setСводка({
+                    краткоеОписание: "",
+                    сильныеСтороны: ["Сильная команда", "Четкая проблема", "Релевантность транспорту"],
+                    основныеРиски: ["Непонятная юнит-экономика", "Ограниченный трекшн", "Риски интеграции"],
+                    финальнаяРекомендация: "Требует оценки"
+                });
+                setCurrentProjectId(null);
+            };
+
+            const toggleSection = (key) => {
+                setExpandedSections((prev) => ({ ...prev, [key]: !prev[key] }));
+            };
+
+            const handleProjectCardChange = (field, value) => {
+                setProjectCard((prev) => ({ ...prev, [field]: value }));
+            };
+
+            const handleTargetSegmentToggle = (segment) => {
+                setProjectCard((prev) => {
+                    const exists = prev.targetSegments.includes(segment);
+                    if (exists) {
+                        return {
+                            ...prev,
+                            targetSegments: prev.targetSegments.filter((s) => s !== segment),
+                        };
+                    }
+                    return {
+                        ...prev,
+                        targetSegments: [...prev.targetSegments, segment],
+                    };
+                });
+            };
+
+            const handleFilterChange = (field) => {
+                setFilters((prev) => ({ ...prev, [field]: !prev[field] }));
+            };
+
+            const handleRedFlagChange = (field, value) => {
+                setRedFlags((prev) => ({ ...prev, [field]: value }));
+            };
+
+            const handleИнвестиционнаяОценкаChange = (key, балл) => {
+                setИнвестиционнаяОценка((prev) => ({
+                    ...prev,
+                    [key]: { ...prev[key], балл },
+                }));
+            };
+
+            const handleИнвестиционнаяКомментарийChange = (key, комментарий) => {
+                setИнвестиционнаяОценка((prev) => ({
+                    ...prev,
+                    [key]: { ...prev[key], комментарий },
+                }));
+            };
+
+            const handleТранспортнаяОценкаChange = (key, балл) => {
+                setТранспортнаяОценка((prev) => ({
+                    ...prev,
+                    [key]: { ...prev[key], балл },
+                }));
+            };
+
+            const handleТранспортнаяКомментарийChange = (key, комментарий) => {
+                setТранспортнаяОценка((prev) => ({
+                    ...prev,
+                    [key]: { ...prev[key], комментарий },
+                }));
+            };
+
+            const hasRedFlags = Object.keys(redFlags)
+                .filter((k) => k !== "otherText")
+                .some((k) => redFlags[k]) || false;
+
+            const admittedToEvaluation = filters.соответствуетСекторам &&
+                filters.соответствуетНаправлениям &&
+                filters.минКоманда &&
+                !hasRedFlags;
+
+            const итогиИнвестиционнойОценки = useMemo(() => {
+                let итогоВзвешенный = 0;
+                let максИтог = максБаллПослеMVP;
+                Object.entries(инвестиционнаяОценка).forEach(([key, value]) => {
+                    const вес = весаИнвестиционнойОценки[key];
+                    if (value.балл !== null && typeof вес === 'number') {
+                        итогоВзвешенный += value.балл * вес;
+                    }
+                });
+                const процент = максИтог > 0 ? Math.round((итогоВзвешенный / максИтог) * 100) : 0;
+                return { итогоВзвешенный, процент, максИтог };
+            }, [инвестиционнаяОценка]);
+
+            const итогТранспортнойОценки = useMemo(() => {
+                let итого = 0;
+                Object.values(транспортнаяОценка).forEach((entry) => {
+                    if (entry.балл !== null) {
+                        итого += entry.балл;
+                    }
+                });
+                return итого;
+            }, [транспортнаяОценка]);
+
+            const helperSuggestion = useMemo(() => {
+                const aScore = итогиИнвестиционнойОценки.процент;
+                const bScore = итогТранспортнойОценки;
+                if (aScore >= 55 && bScore >= 6) {
+                    return "Рекомендуемый путь: Перейти к полной оценке (инвестиции и транспортный пилот).";
+                }
+                if (aScore >= 55 && bScore < 6) {
+                    return "Рекомендуемый путь: Только инвестиции (низкая транспортная применимость).";
+                }
+                if (aScore < 55 && bScore >= 6) {
+                    return "Рекомендуемый путь: Только пилот (слабая инвестиционная привлекательность, сильное соответствие транспорту).";
+                }
+                if (aScore === 0 && bScore === 0) {
+                    return "Заполните оценки, чтобы увидеть автоматическую рекомендацию.";
+                }
+                return "Рекомендуемый путь: Отклонить или пересмотреть после значительных улучшений.";
+            }, [итогиИнвестиционнойОценки.процент, итогТранспортнойОценки]);
+
+            const отображаемоеРешение = overrideDecision || helperSuggestion.replace("Рекомендуемый путь: ", "");
+
+            const финальнаяРекомендацияТекст = useMemo(() => {
+                if (overrideDecision) {
+                    return overrideDecision;
+                }
+                if (helperSuggestion.startsWith("Рекомендуемый путь: ")) {
+                    return helperSuggestion.replace("Рекомендуемый путь: ", "");
+                }
+                return "Требует оценки";
+            }, [overrideDecision, helperSuggestion]);
+
+            const mainContainerClass = "min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-900 dark:text-slate-100 flex flex-col";
+            const contentWrapperClass = "flex-1 flex flex-col max-w-6xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6 lg:py-8";
+            const sectionCardClass = "bg-white dark:bg-slate-800 shadow-sm rounded-xl border border-slate-200 dark:border-slate-700 mb-4 sm:mb-6 fade-in";
+            const sectionHeaderClass = "flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-slate-200 dark:border-slate-700 cursor-pointer";
+            const sectionBodyClass = "px-4 sm:px-6 py-4 sm:py-5";
+            const inputBaseClass = "w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition";
+            const labelClass = "block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1";
+            const textareaClass = "w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 py-2 text-sm min-h-[4rem] focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition";
+            const badgeClassBase = "inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold border";
+
+            return (
+                <div className={mainContainerClass}>
+                    <header className="border-b border-slate-200 dark:border-slate-800 bg-white/80 dark:bg-slate-900/80 backdrop-blur sticky top-0 z-20">
+                        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                                <span className="inline-flex items-center justify-center h-8 w-8 rounded-lg bg-blue-600 text-white text-sm font-bold">
+                                    ТИМ
+                                </span>
+                                <div>
+                                    <div className="text-sm font-semibold tracking-tight">Транспортные инновации Москвы</div>
+                                    <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                                        Система оценки проектов
+                                        <span className={`ml-2 px-1.5 py-0.5 rounded text-xs ${
+                                            backendStatus === 'connected' 
+                                                ? 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200' 
+                                                : backendStatus === 'checking'
+                                                ? 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200'
+                                                : 'bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200'
+                                        }`}>
+                                            {backendStatus === 'connected' ? 'Бэкенд подключен' : 
+                                             backendStatus === 'checking' ? 'Проверка...' : 'Бэкенд отключен'}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                            <nav className="flex items-center gap-2 text-sm font-medium">
+                                <button
+                                    type="button"
+                                    onClick={() => setActiveTab("new")}
+                                    className={`px-3 py-1.5 rounded-full transition text-xs sm:text-sm ${
+                                        activeTab === "new"
+                                            ? "bg-blue-600 text-white shadow-sm"
+                                            : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                                    }`}
+                                >
+                                    Новая оценка
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setActiveTab("projects");
+                                        loadProjects();
+                                    }}
+                                    className={`px-3 py-1.5 rounded-full transition text-xs sm:text-sm ${
+                                        activeTab === "projects"
+                                            ? "bg-blue-600 text-white shadow-sm"
+                                            : "text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                                    }`}
+                                >
+                                    Проекты
+                                </button>
+                            </nav>
+                        </div>
+                    </header>
+
+                    <main className={contentWrapperClass}>
+                        {activeTab === "new" ? (
+                            <div className="flex flex-col gap-4 sm:gap-6 lg:gap-8">
+                                {/* Панель управления */}
+                                <div className="flex flex-wrap gap-2 justify-between items-center p-4 bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700">
+                                    <div className="flex gap-2">
+                                        <button
+                                            type="button"
+                                            onClick={resetForm}
+                                            className="px-4 py-2 text-sm bg-slate-200 text-slate-800 dark:bg-slate-700 dark:text-slate-200 rounded-lg hover:bg-slate-300 dark:hover:bg-slate-600 transition"
+                                            disabled={loading}
+                                        >
+                                            Новая оценка
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={saveProject}
+                                            disabled={loading}
+                                            className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition flex items-center gap-2 disabled:opacity-50"
+                                        >
+                                            {loading && <div className="loading-spinner"></div>}
+                                            {currentProjectId ? 'Обновить проект' : 'Сохранить проект'}
+                                        </button>
+                                    </div>
+                                    {currentProjectId && (
+                                        <span className="text-xs text-slate-500 dark:text-slate-400 px-3 py-1 bg-slate-100 dark:bg-slate-700 rounded-full">
+                                            Редактирование: {projectCard.projectName || 'Безымянный проект'}
+                                        </span>
+                                    )}
+                                </div>
+
+                                {/* Раздел A: Карточка проекта */}
+                                <section className={sectionCardClass}>
+                                    <header className={sectionHeaderClass} onClick={() => toggleSection("A")}>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Раздел A</span>
+                                            <h2 className="text-sm sm:text-base font-semibold">Карточка проекта</h2>
+                                        </div>
+                                        <button type="button" className="text-xs text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">
+                                            {expandedSections.A ? "Свернуть" : "Развернуть"}
+                                        </button>
+                                    </header>
+                                    {expandedSections.A && (
+                                        <div className={sectionBodyClass}>
+                                            <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                                                <p className="text-xs text-blue-700 dark:text-blue-300">
+                                                    💡 <strong>Подсказка:</strong> Заполните основную информацию о проекте. Это поможет идентифицировать проект и связаться с командой.
+                                                </p>
+                                            </div>
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
+                                                <div>
+                                                    <label className={labelClass}>Название проекта *</label>
+                                                    <input className={inputBaseClass} type="text" value={projectCard.projectName}
+                                                        onChange={(e) => handleProjectCardChange("projectName", e.target.value)}
+                                                        placeholder="Введите название проекта" />
+                                                </div>
+                                                <div>
+                                                    <label className={labelClass}>Юридическое название</label>
+                                                    <input className={inputBaseClass} type="text" value={projectCard.legalName}
+                                                        onChange={(e) => handleProjectCardChange("legalName", e.target.value)}
+                                                        placeholder="Юридическое название компании" />
+                                                </div>
+                                                <div>
+                                                    <label className={labelClass}>Веб-сайт</label>
+                                                    <input className={inputBaseClass} type="url" value={projectCard.website}
+                                                        onChange={(e) => handleProjectCardChange("website", e.target.value)}
+                                                        placeholder="https://example.com" />
+                                                </div>
+                                                <div>
+                                                    <label className={labelClass}>Контактное лицо</label>
+                                                    <input className={inputBaseClass} type="text" value={projectCard.contactPerson}
+                                                        onChange={(e) => handleProjectCardChange("contactPerson", e.target.value)}
+                                                        placeholder="ФИО контактного лица" />
+                                                </div>
+                                                <div>
+                                                    <label className={labelClass}>Email</label>
+                                                    <input className={inputBaseClass} type="email" value={projectCard.email}
+                                                        onChange={(e) => handleProjectCardChange("email", e.target.value)}
+                                                        placeholder="contact@example.com" />
+                                                </div>
+                                                <div>
+                                                    <label className={labelClass}>Телефон</label>
+                                                    <input className={inputBaseClass} type="tel" value={projectCard.phone}
+                                                        onChange={(e) => handleProjectCardChange("phone", e.target.value)}
+                                                        placeholder="+7..." />
+                                                </div>
+                                                <div>
+                                                    <label className={labelClass}>Индустрия</label>
+                                                    <select className={inputBaseClass} value={projectCard.industry}
+                                                        onChange={(e) => handleProjectCardChange("industry", e.target.value)}>
+                                                        <option value="">Выберите индустрию</option>
+                                                        {индустрии.map((ind) => <option key={ind} value={ind}>{ind}</option>)}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className={labelClass}>Тип продукта</label>
+                                                    <select className={inputBaseClass} value={projectCard.productType}
+                                                        onChange={(e) => handleProjectCardChange("productType", e.target.value)}>
+                                                        <option value="">Выберите тип</option>
+                                                        {типыПродуктов.map((type) => <option key={type} value={type}>{type}</option>)}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className={labelClass}>Модель продаж</label>
+                                                    <select className={inputBaseClass} value={projectCard.salesModel}
+                                                        onChange={(e) => handleProjectCardChange("salesModel", e.target.value)}>
+                                                        <option value="">Выберите модель</option>
+                                                        {моделиПродаж.map((model) => <option key={model} value={model}>{model}</option>)}
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className={labelClass}>Стадия продукта</label>
+                                                    <select className={inputBaseClass} value={projectCard.productStage}
+                                                        onChange={(e) => handleProjectCardChange("productStage", e.target.value)}>
+                                                        <option value="">Выберите стадию</option>
+                                                        {стадииПродукта.map((stage) => <option key={stage} value={stage}>{stage}</option>)}
+                                                    </select>
+                                                </div>
+                                            </div>
+                                            <div className="mt-4 sm:mt-6">
+                                                <label className={labelClass}>Целевые сегменты транспорта Москвы</label>
+                                                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                                                    {целевыеСегменты.map((segment) => {
+                                                        const active = projectCard.targetSegments.includes(segment);
+                                                        return (
+                                                            <button key={segment} type="button"
+                                                                onClick={() => handleTargetSegmentToggle(segment)}
+                                                                className={`text-xs sm:text-sm px-2.5 py-1.5 rounded-full border transition ${
+                                                                    active
+                                                                        ? "bg-blue-600 text-white border-blue-600 shadow-sm"
+                                                                        : "bg-slate-50 dark:bg-slate-900 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+                                                                }`}>
+                                                                {segment}
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </section>
+
+                                {/* Раздел B: Фильтры и критические признаки */}
+                                <section className={sectionCardClass}>
+                                    <header className={sectionHeaderClass} onClick={() => toggleSection("B")}>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Раздел B</span>
+                                            <h2 className="text-sm sm:text-base font-semibold">Фильтры и критические признаки</h2>
+                                        </div>
+                                        <button type="button" className="text-xs text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">
+                                            {expandedSections.B ? "Свернуть" : "Развернуть"}
+                                        </button>
+                                    </header>
+                                    {expandedSections.B && (
+                                        <div className={sectionBodyClass}>
+                                            <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                                                <p className="text-xs text-blue-700 dark:text-blue-300">
+                                                    ⚠️ <strong>Подсказка:</strong> Проект должен соответствовать всем критериям и не иметь критических признаков для допуска к оценке.
+                                                </p>
+                                            </div>
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                                <div>
+                                                    <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">Критерии соответствия</h3>
+                                                    <div className="space-y-2">
+                                                        <label className="flex items-center justify-between gap-2 text-sm">
+                                                            <span className="text-slate-700 dark:text-slate-200">Соответствует приоритетным секторам деятельности</span>
+                                                            <button type="button" onClick={() => handleFilterChange("соответствуетСекторам")} className={`relative inline-flex h-5 w-9 rounded-full transition ${filters.соответствуетСекторам ? "bg-blue-600" : "bg-slate-300 dark:bg-slate-700"}`}>
+                                                                <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transform transition ${filters.соответствуетСекторам ? "translate-x-4" : "translate-x-0.5"}`} />
+                                                            </button>
+                                                        </label>
+                                                        <label className="flex items-center justify-between gap-2 text-sm">
+                                                            <span className="text-slate-700 dark:text-slate-200">Соответствует технологическим направлениям</span>
+                                                            <button type="button" onClick={() => handleFilterChange("соответствуетНаправлениям")} className={`relative inline-flex h-5 w-9 rounded-full transition ${filters.соответствуетНаправлениям ? "bg-blue-600" : "bg-slate-300 dark:bg-slate-700"}`}>
+                                                                <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transform transition ${filters.соответствуетНаправлениям ? "translate-x-4" : "translate-x-0.5"}`} />
+                                                            </button>
+                                                        </label>
+                                                        <label className="flex items-center justify-between gap-2 text-sm">
+                                                            <span className="text-slate-700 dark:text-slate-200">Минимальный размер команды ≥ 2 человек</span>
+                                                            <button type="button" onClick={() => handleFilterChange("минКоманда")} className={`relative inline-flex h-5 w-9 rounded-full transition ${filters.минКоманда ? "bg-blue-600" : "bg-slate-300 dark:bg-slate-700"}`}>
+                                                                <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transform transition ${filters.минКоманда ? "translate-x-4" : "translate-x-0.5"}`} />
+                                                            </button>
+                                                        </label>
+                                                    </div>
+                                                </div>
+                                                <div>
+                                                    <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">Критические признаки</h3>
+                                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+                                                        {['missingDocs', 'outOfFocusIndustry', 'foundersNotFulltime', 'keyCompetencesMissing', 'unusualOwnership', 'shortRunway', 'processesOutsourced', 'otherFlag'].map((flag) => (
+                                                            <label key={flag} className="inline-flex items-center gap-2 text-xs sm:text-sm text-slate-700 dark:text-slate-200">
+                                                                <input type="checkbox" className="h-4 w-4 rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500"
+                                                                    checked={redFlags[flag]} onChange={(e) => handleRedFlagChange(flag, e.target.checked)} />
+                                                                <span>{{
+                                                                    missingDocs: 'Отсутствуют ключевые документы',
+                                                                    outOfFocusIndustry: 'Вне фокусной индустрии',
+                                                                    foundersNotFulltime: 'Основатели не работают полное время',
+                                                                    keyCompetencesMissing: 'Отсутствуют ключевые компетенции',
+                                                                    unusualOwnership: 'Необычная структура собственности',
+                                                                    shortRunway: 'Runway < 3 месяцев',
+                                                                    processesOutsourced: 'Ключевые процессы полностью аутсорсены',
+                                                                    otherFlag: 'Другое'
+                                                                }[flag]}</span>
+                                                            </label>
+                                                        ))}
+                                                    </div>
+                                                    {redFlags.otherFlag && (
+                                                        <div className="mt-2">
+                                                            <textarea className={textareaClass} placeholder="Опишите другие критические признаки"
+                                                                value={redFlags.otherText} onChange={(e) => handleRedFlagChange("otherText", e.target.value)} />
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <div className="mt-4 flex items-center justify-between flex-wrap gap-3">
+                                                <div>
+                                                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Статус</span>
+                                                    <div className="mt-1">
+                                                        <span className={`${badgeClassBase} ${
+                                                            admittedToEvaluation
+                                                                ? "bg-green-50 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-200 dark:border-green-700"
+                                                                : "bg-red-50 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-200 dark:border-red-700"
+                                                        }`}>
+                                                            <span className="w-2 h-2 rounded-full mr-2 bg-current opacity-80" />
+                                                            {admittedToEvaluation ? "Допущен к оценке" : "Отклонен на Уровне 0"}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md">
+                                                    Статус определяется на основе соответствия критериям и наличия критических признаков.
+                                                </p>
+                                            </div>
+                                        </div>
+                                    )}
+                                </section>
+
+                                {/* Раздел C: Инвестиционная оценка */}
+                                <section className={sectionCardClass}>
+                                    <header className={sectionHeaderClass} onClick={() => toggleSection("C")}>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Раздел C</span>
+                                            <h2 className="text-sm sm:text-base font-semibold">Оценка инвестиционной привлекательности</h2>
+                                        </div>
+                                        <button type="button" className="text-xs text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">
+                                            {expandedSections.C ? "Свернуть" : "Развернуть"}
+                                        </button>
+                                    </header>
+                                    {expandedSections.C && (
+                                        <div className={sectionBodyClass}>
+                                            <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                                                <p className="text-xs text-blue-700 dark:text-blue-300">
+                                                    📊 <strong>Подсказка:</strong> Оцените проект по 8-ми параметрам инвестиционной привлекательности. Используйте шкалу 0-2, где 0 - слабо, 2 - отлично.
+                                                </p>
+                                            </div>
+                                            <div className="overflow-x-auto">
+                                                <table className="min-w-full text-xs sm:text-sm border-collapse">
+                                                    <thead>
+                                                        <tr className="border-b border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400">
+                                                            <th className="text-left py-2 pr-2 font-semibold">Параметр</th>
+                                                            <th className="text-center py-2 px-2 font-semibold">Балл (0/1/2)</th>
+                                                            <th className="text-center py-2 px-2 font-semibold">Вес</th>
+                                                            <th className="text-center py-2 px-2 font-semibold">Взвешенный</th>
+                                                            <th className="text-left py-2 pl-2 font-semibold">Комментарий</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {Object.entries({
+                                                            продукт: 'Продукт / Идея',
+                                                            рынок: 'Рынок',
+                                                            бизнесМодель: 'Бизнес-модель',
+                                                            трекшн: 'Трекшн / Динамика',
+                                                            команда: 'Команда',
+                                                            конкуренция: 'Конкуренция',
+                                                            финансы: 'Финансы',
+                                                            сделка: 'Сделка'
+                                                        }).map(([key, label]) => {
+                                                            const value = инвестиционнаяОценка[key];
+                                                            const weight = весаИнвестиционнойОценки[key];
+                                                            const weighted = value.балл !== null ? value.балл * weight : 0;
+                                                            return (
+                                                                <tr key={key} className="border-t border-slate-100 dark:border-slate-800 align-top">
+                                                                    <td className="py-2 pr-2 text-xs sm:text-sm text-slate-800 dark:text-slate-100 whitespace-nowrap">{label}</td>
+                                                                    <td className="py-2 px-2 text-center">
+                                                                        <div className="inline-flex items-center gap-1 sm:gap-2">
+                                                                            {[0, 1, 2].map((s) => (
+                                                                                <label key={s} className="inline-flex items-center gap-1 text-[11px] sm:text-xs">
+                                                                                    <input type="radio" name={`invest-${key}`} value={s} checked={value.балл === s}
+                                                                                        onChange={() => handleИнвестиционнаяОценкаChange(key, s)} className="h-3 w-3 text-blue-600 focus:ring-blue-500" />
+                                                                                    <span>{s}</span>
+                                                                                </label>
+                                                                            ))}
+                                                                        </div>
+                                                                    </td>
+                                                                    <td className="py-2 px-2 text-center text-xs sm:text-sm text-slate-700 dark:text-slate-200">{weight}</td>
+                                                                    <td className="py-2 px-2 text-center text-xs sm:text-sm text-slate-800 dark:text-slate-100">{weighted}</td>
+                                                                    <td className="py-2 pl-2">
+                                                                        <textarea className={`${textareaClass} text-[11px] sm:text-xs`} placeholder="Краткий комментарий"
+                                                                            value={value.комментарий} onChange={(e) => handleИнвестиционнаяКомментарийChange(key, e.target.value)} />
+                                                                    </td>
+                                                                </tr>
+                                                            );
+                                                        })}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                            <div className="mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                                                <div>
+                                                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Итоговый взвешенный балл</div>
+                                                    <div className="mt-1 text-sm">{итогиИнвестиционнойОценки.итогоВзвешенный} / {итогиИнвестиционнойОценки.максИтог}</div>
+                                                </div>
+                                                <div className="flex-1 max-w-md">
+                                                    <div className="flex items-center justify-between text-xs mb-1">
+                                                        <span className="font-semibold text-slate-500 dark:text-slate-400">Инвестиционная оценка, %</span>
+                                                        <span className="font-semibold text-slate-800 dark:text-slate-100">{итогиИнвестиционнойОценки.процент}%</span>
+                                                    </div>
+                                                    <div className="h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                                                        <div className="h-full rounded-full bg-blue-500 transition-all" style={{ width: `${Math.min(итогиИнвестиционнойОценки.процент, 100)}%` }} />
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </section>
+
+                                {/* Раздел D: Транспортная оценка */}
+                                <section className={sectionCardClass}>
+                                    <header className={sectionHeaderClass} onClick={() => toggleSection("D")}>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Раздел D</span>
+                                            <h2 className="text-sm sm:text-base font-semibold">Оценка транспортной применимости</h2>
+                                        </div>
+                                        <button type="button" className="text-xs text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">
+                                            {expandedSections.D ? "Свернуть" : "Развернуть"}
+                                        </button>
+                                    </header>
+                                    {expandedSections.D && (
+                                        <div className={sectionBodyClass}>
+                                            <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                                                <p className="text-xs text-blue-700 dark:text-blue-300">
+                                                    🚇 <strong>Подсказка:</strong> Оцените, насколько проект подходит для транспортной системы Москвы. Учитывайте готовность, интеграцию и потенциальный эффект.
+                                                </p>
+                                            </div>
+                                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+                                                {Object.entries({
+                                                    готовность: { title: 'Готовность продукта', description: 'Уровень технологической и операционной зрелости продукта.' },
+                                                    каналы: { title: 'Каналы продаж', description: 'Доступные и потенциальные каналы в транспорте и за его пределами.' },
+                                                    масштабируемость: { title: 'Масштабируемость', description: 'Возможность масштабирования в московском транспорте и на других рынках.' },
+                                                    применимость: { title: 'Применимость в транспорте Москвы', description: 'Соответствие конкретным use case и инфраструктуре.' },
+                                                    конкуренция: { title: 'Конкурентная среда', description: 'Относительная сила по сравнению с альтернативами в контексте Москвы.' },
+                                                    команда: { title: 'Команда (Готовность для транспорта)', description: 'Наличие компетенций для реализации и поддержки транспортных пилотов.', maxScore: 1 }
+                                                }).map(([key, { title, description, maxScore }]) => {
+                                                    const value = транспортнаяОценка[key];
+                                                    const scores = maxScore === 1 ? [0, 1] : [0, 1, 2];
+                                                    return (
+                                                        <div key={key} className="border border-slate-200 dark:border-slate-700 rounded-lg px-3 sm:px-4 py-3 sm:py-4 bg-slate-50/60 dark:bg-slate-900/40">
+                                                            <div className="flex items-center justify-between gap-2">
+                                                                <div>
+                                                                    <h3 className="text-xs sm:text-sm font-semibold text-slate-800 dark:text-slate-100">{title}</h3>
+                                                                    <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">{description}</p>
+                                                                </div>
+                                                                <div className="text-xs font-semibold text-slate-600 dark:text-slate-300">Балл</div>
+                                                            </div>
+                                                            <div className="mt-2 flex items-center flex-wrap gap-2">
+                                                                {scores.map((s) => (
+                                                                    <label key={s} className="inline-flex items-center gap-1 text-[11px] sm:text-xs text-slate-700 dark:text-slate-200">
+                                                                        <input type="radio" name={`transport-${key}`} value={s} checked={value.балл === s}
+                                                                            onChange={() => handleТранспортнаяОценкаChange(key, s)} className="h-3 w-3 text-blue-600 focus:ring-blue-500" />
+                                                                        <span>{s}</span>
+                                                                    </label>
+                                                                ))}
+                                                            </div>
+                                                            <div className="mt-2">
+                                                                <textarea className={`${textareaClass} text-[11px] sm:text-xs`} placeholder="Комментарий по этому критерию"
+                                                                    value={value.комментарий} onChange={(e) => handleТранспортнаяКомментарийChange(key, e.target.value)} />
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                            <div className="mt-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                                                <div>
+                                                    <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Итоговый балл транспортной оценки</div>
+                                                    <div className="mt-1">
+                                                        <span className={`${badgeClassBase} bg-blue-50 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-200 dark:border-blue-700`}>
+                                                            {итогТранспортнойОценки} баллов
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                                <div className="flex-1 max-w-md">
+                                                    <div className="h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                                                        <div className="h-full rounded-full bg-green-500 transition-all" style={{ width: `${Math.min((итогТранспортнойОценки / 11) * 100, 100)}%` }} />
+                                                    </div>
+                                                    <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 text-right">Порог для прохождения: 6 баллов</div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
+                                </section>
+
+                                {/* Раздел E: Матрица решений */}
+                                <section className={sectionCardClass}>
+                                    <header className={sectionHeaderClass} onClick={() => toggleSection("E")}>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Раздел E</span>
+                                            <h2 className="text-sm sm:text-base font-semibold">Матрица решений</h2>
+                                        </div>
+                                        <button type="button" className="text-xs text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200">
+                                            {expandedSections.E ? "Свернуть" : "Развернуть"}
+                                        </button>
+                                    </header>
+                                    {expandedSections.E && (
+                                        <div className={sectionBodyClass}>
+                                            <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                                                <p className="text-xs text-blue-700 dark:text-blue-300">
+                                                    🎯 <strong>Подсказка:</strong> Система автоматически рекомендует решение на основе оценок. Эксперт может переопределить рекомендацию при необходимости.
+                                                </p>
+                                            </div>
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+                                                <div className="space-y-3">
+                                                    <div>
+                                                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Инвестиционная оценка, %</div>
+                                                        <div className="mt-1 text-lg font-semibold">{итогиИнвестиционнойОценки.процент}%</div>
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Транспортная оценка</div>
+                                                        <div className="mt-1 text-lg font-semibold">{итогТранспортнойОценки} баллов</div>
+                                                    </div>
+                                                    <div className="text-xs text-slate-500 dark:text-slate-400">
+                                                        Автоматическая рекомендация основана на порогах: инвестиционная оценка ≥ 55% и транспортная оценка ≥ 6.
+                                                    </div>
+                                                </div>
+                                                <div className="space-y-3">
+                                                    <div>
+                                                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Рекомендуемый путь</div>
+                                                        <div className="mt-1 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2">
+                                                            {helperSuggestion}
+                                                        </div>
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-1">Экспертное решение (опционально)</div>
+                                                        <select className={inputBaseClass} value={overrideDecision} onChange={(e) => setOverrideDecision(e.target.value)}>
+                                                            <option value="">Без переопределения (использовать рекомендацию)</option>
+                                                            <option value="Рекомендовано к полной оценке">Рекомендовано к полной оценке</option>
+                                                            <option value="Только пилот">Только пилот</option>
+                                                            <option value="Только инвестиции">Только инвестиции</option>
+                                                            <option value="Отклонить">Отклонить</option>
+                                                        </select>
+                                                        <textarea className={`${textareaClass} mt-2`} placeholder="Комментарий эксперта к решению"
+                                                            value={overrideComment} onChange={(e) => setOverrideComment(e.target.value)} />
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div className="mt-4 text-xs text-slate-500 dark:text-slate-400">
+                                                Финальное решение для сводки:{" "}
+                                                <span className="font-semibold text-slate-800 dark:text-slate-100">
+                                                    {финальнаяРекомендацияТекст}
+                                                </span>
+                                            </div>
+                                        </div>
+                                    )}
+                                </section>
+                            </div>
+                        ) : (
+                            <section className={sectionCardClass}>
+                                <header className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-slate-200 dark:border-slate-700">
+                                    <div>
+                                        <h2 className="text-sm sm:text-base font-semibold">Проекты</h2>
+                                        <p className="text-xs text-slate-500 dark:text-slate-400">
+                                            Найдено проектов: {projects.length}
+                                            {backendStatus !== 'connected' && (
+                                                <span className="ml-2 text-amber-600 dark:text-amber-400">
+                                                    (Используются кэшированные данные - бэкенд отключен)
+                                                </span>
+                                            )}
+                                        </p>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        {loading && <div className="loading-spinner"></div>}
+                                    </div>
+                                </header>
+                                <div className="px-4 sm:px-6 py-4 sm:py-5 overflow-x-auto">
+                                    {projects.length === 0 ? (
+                                        <div className="text-center py-8 text-slate-500 dark:text-slate-400">
+                                            <p>Проекты не найдены. Создайте первую оценку!</p>
+                                        </div>
+                                    ) : (
+                                        <table className="min-w-full text-xs sm:text-sm border-collapse">
+                                            <thead>
+                                                <tr className="border-b border-slate-200 dark:border-slate-700 text-slate-500 dark:text-slate-400">
+                                                    <th className="text-left py-2 pr-2 font-semibold">Название проекта</th>
+                                                    <th className="text-left py-2 px-2 font-semibold">Индустрия</th>
+                                                    <th className="text-center py-2 px-2 font-semibold">Инвест. оценка %</th>
+                                                    <th className="text-center py-2 px-2 font-semibold">Трансп. оценка</th>
+                                                    <th className="text-left py-2 px-2 font-semibold">Статус</th>
+                                                    <th className="text-center py-2 pl-2 font-semibold">Действия</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {projects.map((project) => (
+                                                    <tr key={project.id} className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-900/40 transition">
+                                                        <td className="py-2 pr-2 text-slate-800 dark:text-slate-100 whitespace-nowrap">{project.name}</td>
+                                                        <td className="py-2 px-2 text-slate-700 dark:text-slate-200 whitespace-nowrap">{project.industry}</td>
+                                                        <td className="py-2 px-2 text-center">{project.инвестиционнаяОценка}</td>
+                                                        <td className="py-2 px-2 text-center">{project.транспортнаяОценка}</td>
+                                                        <td className="py-2 px-2 text-slate-700 dark:text-slate-200 whitespace-nowrap">{project.status}</td>
+                                                        <td className="py-2 pl-2 text-center">
+                                                            <button type="button" onClick={() => loadProject(project.id)}
+                                                                className="inline-flex items-center px-2.5 py-1 text-[11px] sm:text-xs rounded-full bg-blue-600 text-white hover:bg-blue-700 transition mr-2">
+                                                                Открыть
+                                                            </button>
+                                                            <button type="button" onClick={() => deleteProject(project.id, project.name)}
+                                                                className="inline-flex items-center px-2.5 py-1 text-[11px] sm:text-xs rounded-full bg-red-600 text-white hover:bg-red-700 transition">
+                                                                Удалить
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    )}
+                                </div>
+                            </section>
+                        )}
+                    </main>
+                </div>
+            );
+        }
+
+        // Render the app
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
